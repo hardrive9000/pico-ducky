@@ -2,16 +2,30 @@
 # copyright (c) 2023  Dave Bailey
 # Author: Dave Bailey (dbisu, @daveisu)
 # Pico and Pico W board support
+# Beta Trinkey QT2040 support
 
-from board import *
 import board
 import digitalio
 import storage
+import usb_cdc
+import usb_hid
+import usb_midi
+import supervisor
+
+# Define custom VID, PID, product name, and manufacturer
+CUSTOM_VID = 0x413C                       # 0x1C4F
+CUSTOM_PID = 0x2003                       # 0x000E
+PRODUCT_NAME = "Dell USB Entry Keyboard"  # Genius KB-120 Keyboard
+MANUFACTURER_NAME = "Dell Computer Corp." # SiGma Micro
+
+# Set USB identification
+supervisor.set_usb_identification(vid=CUSTOM_VID, pid=CUSTOM_PID, manufacturer=MANUFACTURER_NAME, product=PRODUCT_NAME)
+
+usb_midi.disable()
+usb_cdc.disable()
+usb_hid.enable((usb_hid.Device.KEYBOARD,))
 
 noStorage = False
-noStoragePin = digitalio.DigitalInOut(GP15)
-noStoragePin.switch_to_input(pull=digitalio.Pull.UP)
-noStorageStatus = noStoragePin.value
 
 # If GP15 is not connected, it will default to being pulled high (True)
 # If GP is connected to GND, it will be low (False)
@@ -24,13 +38,52 @@ noStorageStatus = noStoragePin.value
 #   GP15 not connected == USB NOT visible
 #   GP15 connected to GND == USB visible
 
-if(board.board_id == 'raspberry_pi_pico'):
+# Trinkey QT2040:
+#   Boot button pressed during timeout == USB visible
+#   Boot button not pressed == USB not visible
+
+if(board.board_id == 'raspberry_pi_pico') or (board.board_id == 'waveshare_rp2040_zero'):
+    noStoragePin = digitalio.DigitalInOut(board.GP15)
+    noStoragePin.switch_to_input(pull=digitalio.Pull.UP)
+    noStorageStatus = noStoragePin.value
     # On Pi Pico, default to USB visible
     noStorage = not noStorageStatus
+    noStoragePin.deinit()
 elif(board.board_id == 'raspberry_pi_pico_w'):
+    noStoragePin = digitalio.DigitalInOut(board.GP15)
+    noStoragePin.switch_to_input(pull=digitalio.Pull.UP)
+    noStorageStatus = noStoragePin.value
     # on Pi Pico W, default to USB hidden by default
     # so webapp can access storage
     noStorage = noStorageStatus
+    noStoragePin.deinit()
+elif (board.board_id == 'adafruit_qt2040_trinkey'):
+    # Import os to read the environment file
+    import os
+    # Import supervisor to wait for the timeout
+    import supervisor
+    # Listen for the BOOT button being pressed
+    button = digitalio.DigitalInOut(board.BUTTON)
+    # There is a hardware pullup on this pin, so no need to set it high
+    button.switch_to_input()
+    # Read the timeout from the environment file settings.toml. default to 500ms
+    wait_timeout = os.getenv('trinkey_storage_timeout', 500)
+    # Add the timeout to the current time to final timeout time
+    wait_timeout = supervisor.ticks_ms() + int(wait_timeout)
+    # Loop for the timeout seeing if the button is pressed
+    while supervisor.ticks_ms() < wait_timeout:
+        # By default the BOOT button is pulled high in hardware
+        # so button.value will be True unless the button is pressed
+        if not button.value:
+            print('Not disabling USB drive on Trinkey QT2040')
+            break
+    # If the loop completes that means the button was not pressed
+    else:
+        # And storage should be disabled
+        noStorage = True
+    # Deinit the BOOT button for later use
+    button.deinit()
+
 
 if(noStorage == True):
     # don't show USB drive to host PC
